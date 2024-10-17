@@ -1,0 +1,19 @@
+{
+  "PAYDBCR": {
+    "CommAccno": "00000001",
+    "CommAmt": 10.0,
+    "mSortC": 0,
+    "CommAvBal": 0,
+    "CommActBal": 0,
+    "CommOrigin": {
+      "CommApplid": "example",
+      "CommUserid": "ibm",
+      "CommFacilityName": " ",
+      "CommNetwrkId": " ",
+      "CommFaciltype": 496,
+      "Fill0": " "
+    },
+    "CommSuccess": " ",
+    "CommFailCode": " "
+  }
+}

@@ -1,0 +1,45 @@
+      - name: CBSA Customer Account Listing for Customer 1
+        ansible.builtin.shell: curl -k -u '{{ zos_user }}:{{ zos_user_password }}' -H 'Content-Type:application/json' --request GET https://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ cbsa_zosconnect_port }}/inqacccz/list/1 | grep '"CommSuccess":"Y"'
+        register: gen1_result
+        delegate_to: localhost
+      - debug: msg={{ gen1_result.stdout }}
+
+
+
+      - name: CBSA Account Inquiry for Account 2
+        ansible.builtin.shell: curl -k -u '{{ zos_user }}:{{ zos_user_password }}' -H 'Content-Type:application/json' --request GET https://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ cbsa_zosconnect_port }}/inqaccz/enquiry/2 | grep '"InqAccSuccess":"Y"'
+        register: gen2_result
+        delegate_to: localhost
+      - debug: msg={{ gen2_result.stdout }}
+
+
+
+      - name: CBSA Customer Update
+        ansible.builtin.shell: curl -k -u '{{ zos_user }}:{{ zos_user_password }}' -H 'Content-Type:application/json' --data @'roles/cbsa_test/files/custupd.json' --request PUT https://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ cbsa_zosconnect_port }}/updcust/update | grep '"CommUpdSuccess":"Y"'
+        register: gen3_result
+        delegate_to: localhost
+      - debug: msg={{ gen3_result.stdout }}
+
+
+
+      - name: CBSA Payment
+        ansible.builtin.shell: curl -k -u '{{ zos_user }}:{{ zos_user_password }}' -H 'Content-Type:application/json' --data @'roles/cbsa_test/files/payment.json' --request PUT https://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ cbsa_zosconnect_port }}/makepayment/dbcr | grep '"CommSuccess":"Y"'
+        register: gen4_result
+        delegate_to: localhost
+      - debug: msg={{ gen4_result.stdout }}
+
+
+
+      - name: CBSA Create Customer
+        ansible.builtin.shell: curl -k -u '{{ zos_user }}:{{ zos_user_password }}' -H 'Content-Type:application/json' --data @'roles/cbsa_test/files/crecust.json' --request POST https://{{ hostvars[inventory_hostname]['ansible_host'] }}:{{ cbsa_zosconnect_port }}/crecust/insert | grep '"CommSuccess":"Y"'
+        register: gen5_result
+        delegate_to: localhost
+      - debug: msg={{ gen5_result.stdout }}
+
+      - debug: msg='***** All tests return RC=0. CBSA Install successful *****'
+        when: 
+          - gen1_result.rc == 0  
+          - gen2_result.rc == 0  
+          - gen3_result.rc == 0  
+          - gen4_result.rc == 0  
+          - gen5_result.rc == 0  

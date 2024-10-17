@@ -1,0 +1,9 @@
+      - name: Cleanup "{{ cbsawrk }}"
+        ansible.builtin.file:
+                path: "{{ cbsawrk }}"
+                state: absent   
+
+      - name: Cleanup "{{ wrkdir }}"
+        ansible.builtin.file:
+                path: "{{ wrkdir }}"
+                state: absent                  

@@ -1,0 +1,302 @@
+      - name: Clone CBSA repo to localhost
+        ansible.builtin.git:
+          repo: https://github.com/cicsdev/cics-banking-sample-application-cbsa.git
+          dest: '{{ cbsa_base }}'
+          clone: yes
+          accept_hostkey: yes
+          recursive: yes
+          force: yes
+          version: main
+        delegate_to: localhost
+
+      - name: Create "{{ cbsawrk }}"
+        ansible.builtin.file:
+                path: "{{ cbsawrk }}"
+                state: absent   
+
+      - name: Create "{{ cbsawrk }}"
+        ansible.builtin.file:
+                path: "{{ cbsawrk }}"
+                state: directory
+                mode: 0755
+
+      - name: build db2d JCL
+        ansible.builtin.template:
+                dest: "{{ cbsawrk }}db2d"
+                src: db2d.template
+
+      - name: build cicsstr JCL
+        ansible.builtin.template:
+                dest: "{{ cbsawrk }}cicsstr"
+                src: cicsstr.template
+
+      - name: build cicsstp JCL
+        ansible.builtin.template:
+                dest: "{{ cbsawrk }}cicsstp"
+                src: cicsstp.template
+
+      - name: Stop CICS and ZOSCSRV if its running
+        include_tasks: submitjob.yaml
+        loop:
+          - { jobname: "{{ cbsawrk }}cicsstp", timeout: 300, jobcond: '(00,NE)', convert: 'y' }
+
+      - name: check enq on cics_sysin and fail if it is allocated !! 
+        ansible.builtin.shell: tsocmd "alloc fi(cics1) ds('{{ cics_sysin }}') OLD" | grep 'ALREADY IN USE'
+        register: sysin_result
+        failed_when: sysin_result.rc == 0
+
+      - name: check enq on cics_proclib and fail if it is allocated !!
+        ansible.builtin.shell: tsocmd "alloc fi(cics2) ds('{{ cics_proclib }}') OLD" | grep 'ALREADY IN USE'
+        register: procl_result
+        failed_when: procl_result.rc == 0
+
+      - name: Copy parmlib members to USS for update
+        ansible.builtin.command: 
+                cmd: "{{ item }}"
+        loop:                
+                - cp -O c=iso8859-1 "//'{{ cics_proclib }}({{ cics_regid }})'" "{{ cbsawrk }}{{ cics_regid }}"
+
+      - name: copy dfhsip to cbsawrk
+        ansible.builtin.command:
+                cmd: cp -O c=iso8859-1 "//'{{ cics_sysin }}({{ cics_sip }})'" "{{ cbsawrk }}dfhsip"
+
+      - name: copy zosconnect proc to genwrk
+        ansible.builtin.command:
+                cmd: cp -O c=iso8859-1 "//'{{ zos_proclib }}(zoscsrv)'" "{{ cbsawrk }}zoscsrv"
+
+      - name: Update zoscsrv proc .. cha java_home to java8
+        ansible.builtin.replace:
+                path: "{{ cbsawrk }}zoscsrv"         
+                regexp: 'JAVA_HOME=/usr/lpp/java/java11/current_64/'
+                replace: 'JAVA_HOME=/usr/lpp/java/java8/current_64/'  
+
+      - name: update SIP DB2CONN
+        ansible.builtin.lineinfile:
+           path: '{{ cbsawrk }}dfhsip'
+           insertbefore: BOF
+           regexp: '.*DB2CONN=.+'
+           line: 'DB2CONN=YES,'
+           state: present
+
+      - name: Update CICS Proc remove any DB2 libs before insert
+        ansible.builtin.replace:
+           path: '{{ cbsawrk }}{{ cics_regid }}'
+           regexp: '\/\/. +DD DSN={{ db2_hlq }}.SDSNLOAD,DISP=SHR'
+           replace: '//*'
+           backup: no
+
+      - name: Update CICS Proc remove any DB2 libs before insert
+        ansible.builtin.replace:
+           path: '{{ cbsawrk }}{{ cics_regid }}'
+           regexp: '\/\/. +DD DSN={{ db2_hlq }}.SDSNLOD2,DISP=SHR'
+           replace: '//*'
+           backup: no
+
+      - name: Update CICS Proc add DB2 to DFHRPL
+        ansible.builtin.blockinfile:
+                path: "{{ cbsawrk }}{{ cics_regid }}"
+                state: present
+                insertbefore: "//DFHRPL."
+                marker: "//* {mark} "
+                marker_begin: " Begin Ansible DB2 Steplib Block Insert "
+                marker_end: " End Ansible DB2 Steplib Block Insert"
+                block: |
+                       //         DD DSN={{ db2_hlq }}.SDSNLOAD,DISP=SHR
+                       //         DD DSN={{ db2_hlq }}.SDSNLOD2,DISP=SHR
+
+      - name: Make DB2BUFFR JCL
+        ansible.builtin.template:
+                dest: "{{ cbsawrk }}db2buffr"
+                src: db2buffr.template
+
+      - name: Get Install JCL from cloned repo to USS 
+        ansible.builtin.copy:
+          src: "{{ cbsa_base }}etc/install/base/installjcl"
+          dest: "{{ cbsawrk }}cbsa/"
+          owner: ibmuser
+          group: sys1
+          mode: '0755'
+
+      - name: Push JCL to "{{ cbsa_jcl_install }}"
+        ansible.builtin.shell:
+          cmd: |
+            tsocmd "alloc ds('{{ cbsa_jcl_install }}') dsorg(po) recfm(f b) lrecl(80) space(1,1) cylinders dsntype(library)" 
+            cd "{{ cbsawrk }}"cbsa/installjcl;for i in *.jcl;do cp -O u $i "//'{{ cbsa_jcl_install }}("$(basename $i .jcl)")'";done          
+            cd "{{ cbsawrk }}"cbsa/installjcl;for i in *.csd;do cp -O u $i "//'{{ cbsa_jcl_install }}("$(basename $i .csd)")'";done
+
+      - name: Create jobs directory
+        ansible.builtin.file:
+          path: "{{ cbsawrk }}cbsa/installjcl/jobs"
+          state: directory
+          mode: 755
+
+      - name: Copy JCL back to USS for edits/submission
+        ansible.builtin.command:
+          cmd: cp -O c=iso8859-1 "//'{{ cbsa_jcl_install }}'" '{{ cbsawrk }}cbsa/installjcl/jobs/'
+
+      - name: Submit CRELIBS
+        include_tasks: submitjob.yaml
+        loop:
+          - { jobname: "{{ cbsawrk }}cbsa/installjcl/jobs/crelibs", timeout: 300, jobcond: '(00,NE)', convert: 'n' }
+
+      - name: Get additional Install JCL from cloned repo
+        ansible.builtin.copy:
+          src: "{{ item.src }}"
+          dest: "{{ item.dest }}"
+          owner: ibmuser
+          group: sys1
+          mode: '0755'
+        loop:    
+          - {src: "{{ cbsa_base }}etc/install/base/db2jcl", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}etc/install/base/buildjcl", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}etc/install/base/linkeditjcl", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}src/base/bms_src", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}src/base/asm_src", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}src/base/cobol_src", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}src/base/cobol_copy", dest: '{{ cbsawrk }}cbsa/'}
+          - {src: "{{ cbsa_base }}etc/install/base/aarfiles/", dest: '{{ zos_connect_server_path }}resources/zosconnect/apis/'}
+          - {src: "{{ cbsa_base }}etc/install/base/sarfiles/", dest: '{{ zos_connect_server_path }}resources/zosconnect/services/'}
+
+      - name: Push other install data sets to MVS
+        ansible.builtin.shell:
+          cmd: |
+            cd "{{ cbsawrk }}"cbsa/buildjcl;for i in *.jcl;do cp -O u $i "//'{{ cbsa_buildjcl }}("$(basename $i .jcl)")'";done
+            cd "{{ cbsawrk }}"cbsa/db2jcl;for i in *.jcl;do cp -O u $i "//'{{ cbsa_db2_jcl }}("$(basename $i .jcl)")'";done
+            cd "{{ cbsawrk }}"cbsa/asm_src;for i in *;do cp -O u $i "//'{{ cbsa_asm }}("$(basename $i .assemble)")'";done
+            cd "{{ cbsawrk }}"cbsa/bms_src;for i in *.bms;do cp -O u $i "//'{{ cbsa_bms }}("$(basename $i .bms)")'";done
+            cd "{{ cbsawrk }}"cbsa/cobol_copy;for i in *.cpy;do cp -O u $i "//'{{ cbsa_dsect }}("$(basename $i .cpy)")'";done
+            cd "{{ cbsawrk }}"cbsa/cobol_src;for i in *.cbl;do cp -O u $i "//'{{ cbsa_cobol }}("$(basename $i .cbl)")'";done
+            cd "{{ cbsawrk }}"cbsa/linkeditjcl;for i in *.lked;do cp -O u $i "//'{{ cbsa_lked }}("$(basename $i .lked)")'";done
+
+      - name: Echo a null to DEFAULT.jcl to fix no eol
+        ansible.builtin.shell:
+          cmd: | 
+            echo '' >> "{{ cbsawrk }}cbsa/buildjcl/DEFAULT.jcl"
+            echo '' >> "{{ cbsawrk }}cbsa/installjcl/BANK.csd"
+            echo '' >> "{{ cbsawrk }}cbsa/installjcl/RACF001.jcl"
+            echo '' >> "{{ cbsawrk }}cbsa/installjcl/INSTDB2.jcl"
+            echo '' >> "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl"
+            echo '' >> "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl"
+            echo '' >> "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl"
+
+
+      - name: Update INSTDB2
+        ansible.builtin.replace:  
+          path: "{{ item.mem }}"
+          regexp: "{{ item.regexp }}"
+          replace: "{{ item.replne }}"
+        loop:
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '//JCLLIB  JCLLIB ORDER=DSNC10.PROCLIB', replne: '//*JCLLIB  JCLLIB ORDER=DSNC10.PROCLIB' }        
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '@DB2_HLQ@.SDSNLOAD', replne: '{{ db2_sdsnload }}' }        
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '@DB2_SUBSYSTEM@', replne: '{{ db2_ssid }}' }        
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '@DB2_DSNTEP_PLAN@', replne: '{{ dsntep_plan }}' }        
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '@DB2_DSNTEP_LOADLIB@', replne: '{{ dsntep_runlib }}' }       
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: '@BANK_USER@', replne: 'IBMUSER' }       
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", regexp: 'VCAT DSNV12DP', replne: 'VCAT {{ db2_vcat }}' }
+
+      - name: Update DB2BIND jcl, HBANKCSD and BANKDATA jcl
+        ansible.builtin.replace:
+          path: "{{ item.mem }}"
+          regexp: "{{ item.regexp }}"
+          replace: "{{ item.replne }}"
+        loop:
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_HLQ\@.\@DB2_SUBSYSTEM\@.SDSNEXIT', replne: '{{ db2_sdsnexit }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_HLQ\@', replne: '{{ db2_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_SUBSYSTEM\@', replne: '{{ db2_ssid }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@BANK_DBRMLIB\@', replne: '{{ cbsa_dbrm }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_OWNER\@', replne: '{{ db2_owner }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@BANK_PACKAGE\@', replne: '{{ cbsa_package }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@BANK_PLAN\@', replne: '{{ cbsa_plan }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_DSNTEP_PLAN\@', replne: '{{ dsntep_plan }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@DB2_DSNTEP_LOADLIB\@', replne: '{{ dsntep_runlib }}' }
+          - { mem: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", regexp: '\@BANK_USER\@', replne: 'PUBLIC' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl", regexp: '@CICS_PREFIX@', replne: '{{ cics_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl", regexp: '@CSD_PREFIX@', replne: '{{ cics_regid }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl", regexp: '@CBSA_INSTALL@', replne: '{{ cbsa_jcl_install }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANK.csd", regexp: 'LIST\(.+\)', replne: 'LIST({{ cics_list }})' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANK.csd", regexp: 'DB2CONN\(DBCG\)', replne: 'DB2CONN({{ db2_ssid }}CBSA)' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANK.csd", regexp: 'DB2ID\(DBCG\)', replne: 'DB2ID({{ db2_ssid }})' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@BANK_PREFIX\@', replne: '{{ cbsa_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@DB2_HLQ\@..SDSNLOAD', replne: '{{ db2_sdsnload }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@DB2_HLQ\@', replne: '{{ db2_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@BANK_DBRMLIB\@', replne: '{{ cbsa_dbrm }}' }
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@DB2_SUBSYSTEM\@', replne: '{{ db2_ssid }}' } 
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@DB2_PLAN\@', replne: '{{ cbsa_plan }}' } 
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", regexp: '\@BANK_LOADLIB\@', replne: '{{ cbsa_loadlib }}' } 
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/RACF001.jcl", regexp: 'DBCG', replne: '{{ db2_ssid }}CBSA' } 
+          - { mem: "{{ cbsawrk }}cbsa/installjcl/RACF001.jcl", regexp: ' JCOLLET OGRADYJ.', replne: ')' } 
+
+
+      - name: Update BANK CSD .. remove DB2CONN and TCPIPS from GENAPP if it's there
+        ansible.builtin.blockinfile:
+                path: "{{ cbsawrk }}cbsa/installjcl/BANK.csd"
+                state: present
+                insertbefore: ". DEFINE DB2CONN(DBD1) GROUP(BANK)."
+                marker: "* {mark} "
+                marker_begin: " Begin Ansible Insert deldb2con"
+                marker_end: " End Ansible Insert deldb2con"
+                block: |
+                         DELETE DB2CONN(DBD1GENA) GROUP(GENASAD)
+                         DELETE TCPIPS(ZOSEE) GROUP(GENA)
+
+      - name: Update DEFAULT JCL 
+        ansible.builtin.replace:
+          path: "{{ item.mem }}"
+          regexp: "{{ item.regexp }}"
+          replace: "{{ item.replne }}"
+        loop:
+          - { mem: "{{ cbsawrk }}cbsa/buildjcl/DEFAULT.jcl", regexp: 'DFH560.CICS', replne: '{{ cics_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/buildjcl/DEFAULT.jcl", regexp: 'COBOLHLQ=IGY630', replne: 'COBOLHLQ={{ cobol_hlq }}' }
+          - { mem: "{{ cbsawrk }}cbsa/buildjcl/DEFAULT.jcl", regexp: 'DB2HLQ=DSNC10', replne: 'DB2HLQ={{ db2_hlq }}' }
+
+      - name: Update CICS Proc
+        ansible.builtin.blockinfile:
+                path: "{{ cbsawrk }}{{ cics_regid }}"                
+                state: present
+                insertbefore: "{{ cics_insert_regex }}"
+                marker: "//* {mark} "
+                marker_begin: " Begin Ansible CBSA Block Insert "
+                marker_end: " End Ansible CBSA Block Insert"
+                block: |
+                       //         DD DSN=CBSA.CICSBSA.LOADLIB,DISP=SHR
+
+      - name: Push updates to MVS data sets 
+        include_tasks: iconv.yaml
+        loop:
+                - { convpath: '{{ cbsawrk }}cbsa/buildjcl/DEFAULT.jcl', cpybackpath: "//'{{ cbsa_buildjcl }}(DEFAULT)'" } 
+                - { convpath: '{{ cbsawrk }}cbsa/installjcl/BANK.csd', cpybackpath: "//'{{ cbsa_jcl_install }}(BANK)'" } 
+                - { convpath: '{{ cbsawrk }}{{ cics_regid }}', cpybackpath: "//'{{ cics_proclib }}({{ cics_regid }})'" } 
+                - { convpath: "{{ cbsawrk }}dfhsip", cpybackpath: "//'{{ cics_sysin }}({{ cics_spe }})'" }
+                - { convpath: "{{ cbsawrk }}cbsa/installjcl/RACF001.jcl", cpybackpath: "//'{{ cbsa_jcl_install }}(RACF001)'" }
+                - { convpath: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", cpybackpath: "//'{{ cbsa_jcl_install }}(BANKDATA)'" }
+                - { convpath: "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl", cpybackpath: "//'{{ cbsa_jcl_install }}(HBANKCSD)'" }
+                - { convpath: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", cpybackpath: "//'{{ cbsa_db2_jcl }}(DB2BIND)'" }
+                - { convpath: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", cpybackpath: "//'{{ cbsa_db2_jcl }}(INSTDB2)'" }
+                - { convpath: "{{ cbsawrk }}zoscsrv", cpybackpath: "//'{{ zos_proclib }}(ZOSCSRV)'" }
+
+      - name: Update zosconnect server.xml add feature for cics
+        ansible.builtin.lineinfile:
+                path: "{{ zos_connect_wlp }}{{ zos_connect_vers}}{{ zos_connect_serverxml_path }}server.xml"
+                insertbefore: ".+</featureManager>"
+                state: present
+                line: " <feature>zosconnect:cicsService-1.0</feature>"
+
+      - name: Update zosconnect server.xml
+        ansible.builtin.lineinfile:
+                path: "{{ zos_connect_wlp }}{{ zos_connect_vers}}{{ zos_connect_serverxml_path }}server.xml" 
+                insertbefore: "./server>"
+                state: present
+                line: "<zosconnect_cicsIpicConnection id='cicsConn' host='localhost' port='{{ cbsa_port }}'/>"
+
+      - name: Submit Batch job stream
+        include_tasks: submitjob.yaml
+        loop:
+          - { jobname: "{{ cbsawrk }}db2d", timeout: 300, jobcond: '(00,NE)', convert: 'y' }
+          - { jobname: "{{ cbsawrk }}db2buffr", timeout: 40, jobcond: '(00,NE)', convert: 'y' }
+          - { jobname: "{{ cbsawrk }}cbsa/db2jcl/INSTDB2.jcl", timeout: 40, jobcond: '(05,LT)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cbsa/buildjcl/COMPALL.jcl", timeout: 40, jobcond: '(05,LT)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cbsa/db2jcl/DB2BIND.jcl", timeout: 40, jobcond: '(05,LT)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cbsa/installjcl/BANKDATA.jcl", timeout: 40, jobcond: '(00,NE)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cbsa/installjcl/HBANKCSD.jcl", timeout: 40, jobcond: '(05,LT)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cbsa/installjcl/RACF001.jcl", timeout: 40, jobcond: '(05,LT)', convert: 'n' }
+          - { jobname: "{{ cbsawrk }}cicsstr", timeout: 300, jobcond: '(00,NE)', convert: 'y' }            

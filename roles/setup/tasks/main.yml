@@ -1,0 +1,61 @@
+      - name: Create "{{ wrkdir }}"
+        ansible.builtin.file:
+                path: "{{ wrkdir }}"
+                state: absent   
+
+      - name: Create "{{ wrkdir }}"
+        ansible.builtin.file:
+                path: "{{ wrkdir }}"
+                state: directory
+                mode: 0755
+
+      - name: Remove working directory if already there "{{ base_install_jcl_path }}"
+        ansible.builtin.file:
+                path: "{{ base_install_jcl_path }}"
+                state: absent
+
+      - name: Mkdir "{{ base_install_jcl_path }}"
+        ansible.builtin.file:
+                path: "{{ base_install_jcl_path }}"
+                state: directory
+                mode: 0755
+
+      - name: Create convert script
+        ansible.builtin.template:
+                dest: "{{ base_install_jcl_path }}ansible_conv"
+                src: ansible_conv.template
+
+      - name: Create rev convert script
+        ansible.builtin.template:
+                dest: "{{ base_install_jcl_path }}ansible_rev_conv"
+                src: ansible_revconv.template
+
+      - name: convert rexx convert script to 1047
+        ansible.builtin.shell:
+                cmd: iconv -f utf-8 -t ibm-1047 "{{ base_install_jcl_path }}ansible_rev_conv" > "{{ base_install_jcl_path }}ansible_rconvert"
+
+      - name: convert rexx convert script to 1047
+        ansible.builtin.shell:
+                cmd: iconv -f utf-8 -t ibm-1047 "{{ base_install_jcl_path }}ansible_conv" > "{{ base_install_jcl_path }}ansible_convert"
+
+      - name: make rexx convert executable
+        ansible.builtin.command:
+                cmd: chmod 755 "{{ base_install_jcl_path }}ansible_rconvert"
+
+      - name: make rexx convert executable
+        ansible.builtin.command:
+                cmd: chmod 755 "{{ base_install_jcl_path }}ansible_convert"
+
+      - name: Create submit job script 
+        ansible.builtin.template:
+                dest: "{{ base_install_jcl_path }}ansible_submit"
+                src: ansible_submit.template
+
+      - name: convert rexx submit script to 1047
+        include_tasks: iconv.yaml
+        loop:
+                - { convpath: '{{ base_install_jcl_path }}ansible_submit', cpybackpath: "{{ base_install_jcl_path }}ansible_submit" }
+                       
+      - name: make rexx submit executable
+        ansible.builtin.command:
+                cmd: chmod 755 "{{ base_install_jcl_path }}ansible_submit"               

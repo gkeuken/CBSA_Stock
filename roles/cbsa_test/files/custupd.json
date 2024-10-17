@@ -1,0 +1,14 @@
+{
+  "UpdCust": {
+  "CommEye": "CUST",
+  "CommScode": "987654",
+  "CommCustno": "0000000001",
+  "CommName": "Mr Ronald Trump",
+  "CommAddress": "74 Alcatraz, New York",
+  "CommDob": 0,
+  "CommCreditScore": 0,
+  "CommCsReviewDate": 0,
+  "CommUpdSuccess": " ",
+  "CommUpdFailCd": " "
+  }
+}

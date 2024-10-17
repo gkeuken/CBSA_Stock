@@ -1,0 +1,70 @@
+# cbsa variables
+zosver: '31'
+#
+# change to the z/OS Userid and Password .. used to run CBSA curl tests
+zos_user: 'ibmuser'
+zos_user_password: 'welcome0welcome0'
+#
+# cbsa_base is where the CBSA repo will be cloned to on the local host where this playbook will run .. this must be updated. or default is home_directory/cbsa 
+cbsa_base: '~/cbsa/'
+#
+#wrkdir is z/OS directory where playbook will use to create JCL and other files needed to configure CBSA
+wrkdir: '/tmp/cbsa/'
+#
+#
+#
+ispf_hlq: 'ISP'
+zos_parmlib: 'SYS1.PARMLIB'
+zos_proclib: 'SYS1.PROCLIB'
+#
+base_install_jcl_path: '/tmp/cbsa/scripts/'
+cbsa_zosconnect_port: 9443  
+cbsawrk: '/tmp/cbsa/work/'
+cbsa_port: '30709'
+cbsa_hlq: 'CBSA.CICSBSA'
+cbsa_jcl_install: 'CBSA.JCL.INSTALL'
+cbsa_db2_jcl: 'CBSA.DB2.JCL.INSTALL'
+cbsa_loadlib: 'CBSA.CICSBSA.LOADLIB'
+cbsa_asm: 'CBSA.CICSBSA.ASM'
+cbsa_bms: 'CBSA.CICSBSA.BMS'
+cbsa_dsect: 'CBSA.CICSBSA.DSECT'
+cbsa_cobol: 'CBSA.CICSBSA.COBOL'
+cbsa_dbrm: 'CBSA.CICSBSA.DBRM'
+cbsa_lked: 'CBSA.CICSBSA.LKED'
+cbsa_buildjcl: 'CBSA.CICSBSA.BUILDJCL'
+cbsa_plan: 'CBSA'
+cbsa_package: 'PCBSA'
+#
+dsntep_plan: 'DSNTEP13'
+dsntep_runlib: 'DBD1.RUNLIB.LOAD'
+db2_vcat: 'DBD1'
+db2_ssid: 'DBD1'
+
+db2_hlq: "{{ 'DB2V13' if zosver == '31' else 'DB2.V13R1M0' }}"
+db2_sdsnload: "{{ 'DB2V13.SDSNLOAD' if zosver == '31' else 'DB2.V13R1M0.SDSNLOAD' }}"
+
+db2_sdsnexit: 'DBD1.SDSNEXIT'
+db2_owner: 'IBMUSER'
+#
+cics_sip: 'DFH$SIP1'
+cics_spe: 'DFH\$SIP1'
+cics_sysin: 'CICSTS61.SYSIN'
+cics_regid: 'CICSTS61'
+cics_csd: 'CICSTS61.DFHCSD'
+ 
+cics_hlq: "{{ 'CICSTS61.CICS' if zosver == '31' else 'CICSTS.V6R1M0.CICS' }}"
+
+cics_list: 'STDLIST'
+cics_insert_regex: '//EQADPFMB.'
+cics_proclib: 'SYS1.PROCLIB'
+#
+cobol_hlq: 'IGY.V6R4M0'
+#
+zosc_server: 'ZOSCSRV'
+zos_connect_server_path: '/var/zosconnect/v3r0/servers/defaultServer/'
+zos_connect_wlp: '/var/zosconnect'
+zos_connect_vers: '/v3r0'
+zos_connect_home: '/usr/lpp/IBM/zosconnect'
+zos_connect_serverxml_path: '/servers/defaultServer/'
+#
+#
